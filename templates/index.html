@@ -119,10 +119,19 @@
           <div id="fileList" class="file-list"></div>
         </div>
 
+        <!-- Aperçu avant envoi -->
+        <section
+          class="preview hidden"
+          id="previewSection"
+          aria-live="polite"
+        >
+          <div id="previewBody"></div>
+        </section>
+
         <!-- Action bar -->
         <div class="action-bar">
           <button class="btn-clear hidden" id="btnClear" onclick="clearFiles()">
-            ✕ Vider
+            ✕ Retirer tous les fichiers
           </button>
           <button class="btn-send" id="btnSend" disabled onclick="doImport()">
             <svg

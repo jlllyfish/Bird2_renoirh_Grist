@@ -9,8 +9,12 @@ const resultCard  = document.getElementById("resultCard");
 const resultContent = document.getElementById("resultContent");
 const resultEmpty = document.getElementById("resultEmpty");
 const overlay     = document.getElementById("progressOverlay");
+const previewSection = document.getElementById("previewSection");
+const previewBody    = document.getElementById("previewBody");
 
 let selectedFiles = [];
+let previewSeq = 0;      // ignore les réponses d'aperçu périmées
+let previewOk = false;   // l'envoi n'est possible que si l'aperçu est valide
 
 // ── File input ──────────────────────────────────────────────
 fileInput.addEventListener("change", () => addFiles(fileInput.files));
@@ -47,11 +51,12 @@ function renderFileList() {
     fileSection.classList.add("hidden");
     btnClear.classList.add("hidden");
     btnSend.disabled = true;
+    resetPreview();
     return;
   }
   fileSection.classList.remove("hidden");
   btnClear.classList.remove("hidden");
-  btnSend.disabled = false;
+  btnSend.disabled = true; // réactivé quand l'aperçu est valide
   fileCount.textContent = `${selectedFiles.length} fichier${selectedFiles.length > 1 ? "s" : ""}`;
 
   fileList.innerHTML = selectedFiles.map((f, i) => `
@@ -63,13 +68,15 @@ function renderFileList() {
         </svg>
       </div>
       <div class="file-info">
-        <div class="file-name">${f.name}</div>
-        <div class="file-meta">Excel · ${formatDate(f.lastModified)}</div>
+        <div class="file-name">${escHtml(f.name)}</div>
+        <div class="file-meta">${f.name.toLowerCase().endsWith(".csv") ? "CSV" : "Excel"} · ${formatDate(f.lastModified)}</div>
       </div>
       <span class="file-size">${formatSize(f.size)}</span>
-      <button class="file-remove" onclick="removeFile(${i})" title="Retirer">✕</button>
+      <button class="file-remove" onclick="removeFile(${i})" title="Retirer" aria-label="Retirer ${escHtml(f.name)}">✕</button>
     </div>
   `).join("");
+
+  refreshPreview();
 }
 
 function removeFile(idx) {
@@ -95,9 +102,128 @@ function formatDate(ts) {
   return d.toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric" });
 }
 
+// ── Aperçu avant envoi ──────────────────────────────────────
+function resetPreview() {
+  previewSeq++;
+  previewOk = false;
+  previewSection.classList.add("hidden");
+  previewBody.innerHTML = "";
+}
+
+async function refreshPreview() {
+  const seq = ++previewSeq;
+  previewOk = false;
+  previewSection.classList.remove("hidden");
+  previewBody.innerHTML = `<p class="preview-loading">Analyse des fichiers…</p>`;
+
+  const formData = new FormData();
+  for (const f of selectedFiles) formData.append("files", f);
+
+  let data;
+  try {
+    const resp = await fetch("/api/preview", { method: "POST", body: formData });
+    data = await resp.json();
+  } catch (e) {
+    data = { success: false, error: String(e) };
+  }
+  if (seq !== previewSeq) return; // une analyse plus récente est en cours
+  renderPreview(data);
+}
+
+const ICON_WARN = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`;
+const ICON_CHEV = `<svg class="acc-chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>`;
+
+function plural(n, word) {
+  return `${n} ${word}${n > 1 ? "s" : ""}`;
+}
+
+function badge(text, cls) {
+  return `<span class="badge ${cls}">${escHtml(text)}</span>`;
+}
+
+// items : fragments HTML déjà échappés
+function alertBox(kind, items) {
+  const li = items.map((t) => `<li>${t}</li>`).join("");
+  const role = kind === "err" ? "alert" : "status";
+  return `<div class="alert alert-${kind}" role="${role}"><div class="alert-icon">${ICON_WARN}</div><ul class="alert-text">${li}</ul></div>`;
+}
+
+function renderPreviewFile(f) {
+  const sub = f.kind === "csv"
+    ? `CSV · séparateur <code>;</code> · encodage <code>cp1252</code>`
+    : `Onglet <code>${escHtml(f.sheet)}</code>`;
+
+  const rows = f.columns.map((c) => `
+    <tr>
+      <td>${escHtml(c.source)}</td>
+      <td class="tbl-val">${c.first ? escHtml(c.first) : `<span class="tbl-empty">—</span>`}</td>
+      <td><code>${escHtml(c.grist)}</code>${c.key ? badge("Clé", "badge-key") : ""}</td>
+    </tr>`).join("");
+
+  const shown = f.ignored.slice(0, 10).map(escHtml).join(", ");
+  const ignored = f.ignored.length
+    ? `<p class="acc-ignored">${plural(f.ignored.length, "colonne")} non importée${f.ignored.length > 1 ? "s" : ""} : ${shown}${f.ignored.length > 10 ? ", …" : ""}</p>`
+    : "";
+
+  return `
+    <details class="acc" open>
+      <summary class="acc-head">
+        <span class="acc-name">${escHtml(f.name)}</span>
+        ${badge(f.role_label, f.role === "principal" ? "badge-main" : "badge-grey")}
+        <span class="acc-meta">${plural(f.rows, "ligne")} · ${plural(f.cols_read, "colonne")} lue${f.cols_read > 1 ? "s" : ""} · ${f.columns.length} importée${f.columns.length > 1 ? "s" : ""}</span>
+        ${ICON_CHEV}
+      </summary>
+      <div class="acc-body">
+        <p class="acc-sub">${sub}</p>
+        <div class="tbl-wrap">
+          <table class="tbl">
+            <caption class="sr-only">Colonnes lues dans ${escHtml(f.name)}</caption>
+            <thead>
+              <tr><th scope="col">Colonne du fichier</th><th scope="col">Première valeur</th><th scope="col">Colonne Grist</th></tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+        ${ignored}
+      </div>
+    </details>`;
+}
+
+function renderPreview(data) {
+  previewOk = false;
+  let html = `<h2 class="preview-title">Aperçu avant envoi</h2>`;
+
+  if (!data.success) {
+    html += alertBox("err", [escHtml(data.error || "Analyse impossible")]);
+  } else if (!data.recognized) {
+    const inv = data.files.map((f) =>
+      f.error
+        ? `<strong>${escHtml(f.name)}</strong> — fichier illisible : ${escHtml(f.error)}`
+        : `<strong>${escHtml(f.name)}</strong> — onglets : ${f.sheets.map(escHtml).join(", ") || "aucun"}`
+    );
+    html += alertBox("err", [
+      "Ces fichiers ne correspondent à aucun cas connu (voir mapping.py).",
+      ...inv,
+    ]);
+  } else {
+    previewOk = data.total_rows > 0;
+    html += `
+      <p class="preview-summary">
+        ${badge(data.case_label, "badge-ok")}
+        <span>${plural(data.files_recognized, "fichier")} reconnu${data.files_recognized > 1 ? "s" : ""} · ${plural(data.total_rows, "ligne")} · mode Upsert sur ${escHtml(data.upsert_keys.join(", "))}</span>
+      </p>`;
+    if (data.warnings.length) html += alertBox("warn", data.warnings.map(escHtml));
+    html += `<div class="acc-group">${data.files.map(renderPreviewFile).join("")}</div>`;
+    html += `<p class="preview-note">« — » : cellule vide · ${badge("Clé", "badge-key")} : colonne utilisée pour l'upsert (fichier principal) ou pour la jointure entre fichiers.</p>`;
+  }
+
+  previewBody.innerHTML = html;
+  btnSend.disabled = !previewOk;
+}
+
 // ── Import ──────────────────────────────────────────────────
 async function doImport() {
-  if (!selectedFiles.length) return;
+  if (!selectedFiles.length || !previewOk) return;
 
   overlay.classList.remove("hidden");
   btnSend.disabled = true;
@@ -113,7 +239,7 @@ async function doImport() {
     showResult({ success: false, error: String(e) });
   } finally {
     overlay.classList.add("hidden");
-    btnSend.disabled = false;
+    btnSend.disabled = !previewOk;
   }
 }
 
@@ -145,8 +271,8 @@ function showResult(data) {
           <div><div class="stat-label">Lignes ajoutées</div><div class="stat-sub">sur ce lot</div></div>
           <div class="stat-circle">
             <svg width="48" height="48" viewBox="0 0 60 60">
-              <circle cx="30" cy="30" r="26" fill="none" stroke="#F1EFFC" stroke-width="6"/>
-              <circle cx="30" cy="30" r="26" fill="none" stroke="#5B4FE8" stroke-width="6" stroke-linecap="round" stroke-dasharray="${arcAdded} ${circ}" transform="rotate(-90 30 30)"/>
+              <circle cx="30" cy="30" r="26" fill="none" stroke="#FFF6D8" stroke-width="6"/>
+              <circle cx="30" cy="30" r="26" fill="none" stroke="#F7C600" stroke-width="6" stroke-linecap="round" stroke-dasharray="${arcAdded} ${circ}" transform="rotate(-90 30 30)"/>
             </svg>
             <div class="stat-circle-val">${added}</div>
           </div>
@@ -155,8 +281,8 @@ function showResult(data) {
           <div><div class="stat-label">Lignes traitées</div><div class="stat-sub">au total</div></div>
           <div class="stat-circle">
             <svg width="48" height="48" viewBox="0 0 60 60">
-              <circle cx="30" cy="30" r="26" fill="none" stroke="#F1EFFC" stroke-width="6"/>
-              <circle cx="30" cy="30" r="26" fill="none" stroke="#8B7FF0" stroke-width="6" stroke-linecap="round" stroke-dasharray="${arcTotal} ${circ}" transform="rotate(-90 30 30)"/>
+              <circle cx="30" cy="30" r="26" fill="none" stroke="#FFF6D8" stroke-width="6"/>
+              <circle cx="30" cy="30" r="26" fill="none" stroke="#171717" stroke-width="6" stroke-linecap="round" stroke-dasharray="${arcTotal} ${circ}" transform="rotate(-90 30 30)"/>
             </svg>
             <div class="stat-circle-val">${total}</div>
           </div>
@@ -165,8 +291,8 @@ function showResult(data) {
           <div><div class="stat-label">Fichiers traités</div><div class="stat-sub">ce lot</div></div>
           <div class="stat-circle">
             <svg width="48" height="48" viewBox="0 0 60 60">
-              <circle cx="30" cy="30" r="26" fill="none" stroke="#F1EFFC" stroke-width="6"/>
-              <circle cx="30" cy="30" r="26" fill="none" stroke="#C4BDF7" stroke-width="6" stroke-linecap="round" stroke-dasharray="${arcFiles} ${circ}" transform="rotate(-90 30 30)"/>
+              <circle cx="30" cy="30" r="26" fill="none" stroke="#FFF6D8" stroke-width="6"/>
+              <circle cx="30" cy="30" r="26" fill="none" stroke="#B89400" stroke-width="6" stroke-linecap="round" stroke-dasharray="${arcFiles} ${circ}" transform="rotate(-90 30 30)"/>
             </svg>
             <div class="stat-circle-val">${files}</div>
           </div>
@@ -191,7 +317,7 @@ function showResult(data) {
 }
 
 function escHtml(s) {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
 async function quitApp() {

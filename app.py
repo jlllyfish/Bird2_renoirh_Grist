@@ -36,7 +36,7 @@ if _external_mapping.exists():
     _spec.loader.exec_module(_mapping_module)
 
 from dotenv import load_dotenv  # noqa: E402
-from excel_reader import aggregate_files_by_profile  # noqa: E402
+from excel_reader import aggregate_files_by_profile, build_preview  # noqa: E402
 from flask import Flask, jsonify, render_template, request  # noqa: E402
 from grist_client import _build_session, _count_grist_rows, check_config, send_rows  # noqa: E402
 from mapping import BATCH_SIZE, CASES, COLUMN_MAP  # noqa: E402
@@ -114,6 +114,29 @@ def index():
 def api_status():
     ok, msg = check_config()
     return jsonify({"ok": ok, "message": msg})
+
+
+@app.route("/api/preview", methods=["POST"])
+def api_preview():
+    """Aperçu avant envoi : analyse les fichiers sans rien envoyer vers Grist."""
+    files = request.files.getlist("files")
+    if not files or all(f.filename == "" for f in files):
+        return jsonify({"success": False, "error": "Aucun fichier reçu"}), 400
+
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            paths = []
+            for f in files:
+                if not f.filename:
+                    continue
+                dest = Path(tmpdir) / Path(f.filename).name
+                f.save(dest)
+                paths.append(dest)
+            preview = build_preview(paths)
+        return jsonify({"success": True, **preview})
+    except Exception as e:
+        log.exception(f"Erreur aperçu: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @app.route("/api/import", methods=["POST"])

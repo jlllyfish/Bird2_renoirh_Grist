@@ -21,6 +21,10 @@ Le **CSV des mails** (séparateur `;`, encodage cp1252) est optionnel dans les c
 
 Si un fichier optionnel est absent, les données des autres fichiers partent quand même vers Grist. Les valeurs vides **n'écrasent pas** les données déjà présentes dans Grist (`SKIP_NONE_COLS`).
 
+### Aperçu avant envoi
+
+Dès que des fichiers sont déposés, Bird 2 affiche un aperçu **sans rien envoyer** : cas détecté, nombre de lignes, et pour chaque fichier les colonnes lues, leur **première valeur** et la **colonne Grist** de destination. Les rapprochements incomplets (lignes sans correspondance, colonne attendue absente, fichier non utilisé) sont signalés. Si aucun cas n'est reconnu, les onglets détectés sont listés. Le bouton « Envoyer vers Grist » n'est actif que si l'aperçu est valide.
+
 > Limite connue : le fichier Présence-Absence déposé **seul** n'est pas importable (c'est un rôle de fusion, il lui faut un fichier principal).
 
 ### Colonnes Grist alimentées
@@ -109,7 +113,6 @@ templates/ static/  Interface (palette jaune / noir)
 
 ## Évolutions prévues
 
-- Aperçu avant envoi : colonnes lues, première valeur et colonne Grist de destination.
 - v5.0 : version navigateur (Nubo / ProConnect).
 
 Draaf Occitanie — SRFD — 2026

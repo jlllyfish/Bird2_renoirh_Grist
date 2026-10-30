@@ -229,13 +229,15 @@ def _merge_full_key(merged: dict, records: list[dict], full_key: list[str]):
         merged.setdefault(key, {}).update(rec)
 
 
-def _apply_lookup(merged: dict, records: list[dict], join_key: list[str]):
+def _apply_lookup(merged: dict, records: list[dict], join_key: list[str]) -> int:
+    """Complète `merged` via une clé réduite. Retourne le nombre de lignes complétées."""
     index: dict[tuple, dict] = {}
     for rec in records:
         key = _key_of(rec, join_key)
         if key is None:
             continue
         index[key] = rec
+    matched = 0
     for rec in merged.values():
         reduced = tuple(rec.get(k) for k in join_key)
         if any(v in (None, "") for v in reduced):
@@ -244,14 +246,15 @@ def _apply_lookup(merged: dict, records: list[dict], join_key: list[str]):
         extra = index.get(reduced)
         if extra:
             rec.update(extra)
+            matched += 1
+    return matched
 
 
-def aggregate_files_by_profile(filepaths: list[Path]) -> list[tuple[list[dict], list[str]]]:
-    """
-    Lit tous les fichiers du batch, détecte le cas et effectue la
-    jointure entre fichiers. Retourne [(rows, effective_upsert_keys)].
-    """
-    files_content = {}
+def _load_files(
+    filepaths: list[Path], errors: list[tuple[str, str]] | None = None
+) -> dict[Path, dict]:
+    """Lit tous les fichiers du batch. Les fichiers illisibles sont signalés dans `errors`."""
+    files_content: dict[Path, dict] = {}
     for path in filepaths:
         try:
             content = _read_file(Path(path))
@@ -259,15 +262,22 @@ def aggregate_files_by_profile(filepaths: list[Path]) -> list[tuple[list[dict], 
             log.info(f"{Path(path).name} — onglets: {list(content.keys())}")
         except Exception as e:
             log.warning(f"Impossible de lire {path}: {e}")
+            if errors is not None:
+                errors.append((Path(path).name, str(e)))
+    return files_content
 
-    match = _match_case(files_content)
-    if not match:
-        log.warning(f"Aucun cas reconnu pour le batch: {[p.name for p in filepaths]}")
-        return []
 
-    case, assigned = match
+def _merge_case(
+    case: dict,
+    assigned: dict[str, Path],
+    files_content: dict[Path, dict],
+    stats: dict | None = None,
+) -> list[dict]:
+    """
+    Jointure entre fichiers pour un cas détecté. Si `stats` est fourni, y inscrit
+    pour chaque rôle de complément {total, matched, extra} (utilisé par l'aperçu).
+    """
     full_key = case["full_key"]
-    log.info(f"Cas détecté: {case['label']} — " + ", ".join(f"{r}={p.name}" for r, p in assigned.items()))
 
     # Table principale
     principal_spec = case["roles"]["principal"]
@@ -279,7 +289,15 @@ def aggregate_files_by_profile(filepaths: list[Path]) -> list[tuple[list[dict], 
     if "fusion" in assigned:
         fusion_spec = case["roles"]["fusion"]
         headers, rows = _read_role(fusion_spec, files_content[assigned["fusion"]])
-        _merge_full_key(merged, _rows_to_records(headers, rows, fusion_spec["cols"]), full_key)
+        records = _rows_to_records(headers, rows, fusion_spec["cols"])
+        if stats is not None:
+            fusion_keys = {k for k in (_key_of(r, full_key) for r in records) if k is not None}
+            stats["fusion"] = {
+                "total": len(merged),
+                "matched": len(fusion_keys & merged.keys()),
+                "extra": len(fusion_keys - merged.keys()),
+            }
+        _merge_full_key(merged, records, full_key)
 
     # Lookups (clé réduite) : rôle "lookup" + tous les rôles optionnels trouvés
     lookup_roles = {
@@ -292,13 +310,178 @@ def aggregate_files_by_profile(filepaths: list[Path]) -> list[tuple[list[dict], 
             continue
         headers, rows = _read_role(spec, files_content[assigned[role]])
         records = _rows_to_records(headers, rows, spec["cols"])
-        _apply_lookup(merged, records, spec["join_key"])
+        matched = _apply_lookup(merged, records, spec["join_key"])
+        if stats is not None:
+            stats[role] = {"total": len(merged), "matched": matched, "extra": 0}
 
-    rows_out = list(merged.values())
+    return list(merged.values())
 
+
+def _effective_keys(rows_out: list[dict], full_key: list[str]) -> list[str]:
     effective = [k for k in full_key if any(k in row and row[k] is not None for row in rows_out)]
-    if not effective:
-        effective = full_key
+    return effective or full_key
+
+
+def aggregate_files_by_profile(filepaths: list[Path]) -> list[tuple[list[dict], list[str]]]:
+    """
+    Lit tous les fichiers du batch, détecte le cas et effectue la
+    jointure entre fichiers. Retourne [(rows, effective_upsert_keys)].
+    """
+    files_content = _load_files(filepaths)
+
+    match = _match_case(files_content)
+    if not match:
+        log.warning(f"Aucun cas reconnu pour le batch: {[Path(p).name for p in filepaths]}")
+        return []
+
+    case, assigned = match
+    log.info(f"Cas détecté: {case['label']} — " + ", ".join(f"{r}={p.name}" for r, p in assigned.items()))
+
+    rows_out = _merge_case(case, assigned, files_content)
+    effective = _effective_keys(rows_out, case["full_key"])
 
     log.info(f"{case['label']} → {len(rows_out)} lignes, clés: {effective}")
     return [(rows_out, effective)] if rows_out else []
+
+
+# ── Aperçu avant envoi ─────────────────────────────────────────
+
+ROLE_LABELS = {
+    "principal": "Fichier principal",
+    "fusion": "Fusion · optionnel",
+    "lookup": "Complément · optionnel",
+    "mail": "Mails · optionnel",
+}
+MAX_VALUE_LEN = 80
+
+
+def _fmt_value(val) -> str:
+    if val is None or val == "":
+        return ""
+    text = str(int(val)) if isinstance(val, float) and val.is_integer() else str(val)
+    text = " ".join(text.split())
+    return text if len(text) <= MAX_VALUE_LEN else text[: MAX_VALUE_LEN - 1] + "…"
+
+
+def _describe_role(role: str, spec: dict, path: Path, sheets: dict, case: dict) -> dict:
+    """Décrit un fichier du batch : colonnes lues, 1re valeur, colonne Grist cible."""
+    sheet_name = _find_sheet(sheets, spec["sheet"])
+    headers, rows = sheets[sheet_name]
+    data_rows = [r for r in rows if not all(c is None or c == "" for c in r)]
+    key_cols = spec.get("join_key") or case["full_key"]
+    col_indices = {h: i for i, h in enumerate(headers) if h}
+
+    columns: list[dict] = []
+    missing: list[str] = []
+    for excel_col in spec["cols"]:
+        grist_col = COLUMN_MAP.get(excel_col)
+        if grist_col is None:
+            continue
+        idx = col_indices.get(excel_col)
+        if idx is None:
+            missing.append(excel_col)
+            continue
+        first = ""
+        for row in data_rows:
+            if idx < len(row):
+                first = _fmt_value(_convert(grist_col, row[idx]))
+                if first:
+                    break
+        columns.append(
+            {
+                "source": excel_col,
+                "grist": grist_col,
+                "first": first,
+                "key": grist_col in key_cols,
+            }
+        )
+
+    used = set(spec["cols"])
+    return {
+        "role": role,
+        "role_label": ROLE_LABELS.get(role, role),
+        "name": path.name,
+        "kind": "csv" if sheet_name == CSV_SHEET else "xlsx",
+        "sheet": None if sheet_name == CSV_SHEET else sheet_name,
+        "rows": len(data_rows),
+        "cols_read": len([h for h in headers if h]),
+        "columns": columns,
+        "ignored": [h for h in headers if h and h not in used],
+        "missing": missing,
+    }
+
+
+def build_preview(filepaths: list[Path]) -> dict:
+    """
+    Aperçu avant envoi : détecte le cas, décrit chaque fichier (colonnes lues,
+    1re valeur, colonne Grist cible) et signale les rapprochements incomplets.
+    N'envoie rien vers Grist.
+    """
+    errors: list[tuple[str, str]] = []
+    files_content = _load_files(filepaths, errors)
+
+    inventory = [
+        {"name": p.name, "sheets": ["CSV" if s == CSV_SHEET else s for s in content]}
+        for p, content in files_content.items()
+    ]
+    inventory += [{"name": n, "sheets": [], "error": e} for n, e in errors]
+
+    match = _match_case(files_content)
+    if not match:
+        log.warning(f"Aperçu : aucun cas reconnu pour {[Path(p).name for p in filepaths]}")
+        return {"recognized": False, "files": inventory}
+
+    case, assigned = match
+    stats: dict[str, dict] = {}
+    rows_out = _merge_case(case, assigned, files_content, stats)
+    keys = _effective_keys(rows_out, case["full_key"])
+
+    specs = dict(case["roles"])
+    specs.update(case.get("optional_roles", {}))
+    files = [
+        _describe_role(role, specs[role], path, files_content[path], case)
+        for role, path in assigned.items()
+    ]
+
+    warnings: list[str] = []
+    for f in files:
+        if f["missing"]:
+            warnings.append(
+                f"« {f['name']} » : colonne(s) attendue(s) introuvable(s) : {', '.join(f['missing'])}."
+            )
+    for role, st in stats.items():
+        f = next(x for x in files if x["role"] == role)
+        gained = ", ".join(c["grist"] for c in f["columns"] if not c["key"])
+        unmatched = st["total"] - st["matched"]
+        if unmatched > 0:
+            who = (
+                f"{unmatched} participant(s) sans mail"
+                if role == "mail"
+                else f"{unmatched} ligne(s) sans correspondance dans « {f['name']} »"
+            )
+            warnings.append(
+                f"{who} : les valeurs déjà présentes dans Grist ({gained}) ne seront pas modifiées."
+            )
+        if st["extra"] > 0:
+            warnings.append(
+                f"{st['extra']} ligne(s) présentes uniquement dans « {f['name']} » "
+                "seront ajoutées sans données d'inscription."
+            )
+    used_paths = set(assigned.values())
+    for p in files_content:
+        if p not in used_paths:
+            warnings.append(f"Fichier non utilisé : « {p.name} » (aucun rôle correspondant dans ce cas).")
+    if not rows_out:
+        warnings.append("Aucune ligne exploitable dans les fichiers reconnus.")
+
+    log.info(f"Aperçu : {case['label']} — {len(rows_out)} lignes, {len(warnings)} avertissement(s)")
+    return {
+        "recognized": True,
+        "case_label": case["label"],
+        "files": files,
+        "files_recognized": len(assigned),
+        "total_rows": len(rows_out),
+        "upsert_keys": keys,
+        "grist_columns": len({c["grist"] for f in files for c in f["columns"]}),
+        "warnings": warnings,
+    }
