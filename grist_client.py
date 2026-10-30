@@ -130,6 +130,50 @@ def _count_grist_rows() -> int:
         return 0
 
 
+def fetch_records() -> list[dict] | None:
+    """Toutes les lignes de la table Grist ({colonne: valeur}). None si la lecture échoue."""
+    try:
+        resp = _build_session().get(_records_url(), headers=_headers(), timeout=60)
+        if not resp.ok:
+            return None
+        return [r.get("fields", {}) for r in resp.json().get("records", [])]
+    except Exception:
+        return None
+
+
+def _cmp(value):
+    """Valeur normalisée pour comparer une valeur à envoyer avec celle de Grist."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return float(value)
+    return value
+
+
+def count_changes(existing: list[dict], rows: list[dict], upsert_keys: list[str]) -> dict:
+    """
+    Compare les lignes à envoyer avec la table Grist actuelle, sans rien écrire.
+    Retourne {"added": n, "modified": n, "unchanged": n}.
+    """
+    index: dict[tuple, list[dict]] = {}
+    for rec in existing:
+        key = tuple(_cmp(rec.get(k)) for k in upsert_keys)
+        index.setdefault(key, []).append(rec)
+
+    added = modified = unchanged = 0
+    for row in rows:
+        matches = index.get(tuple(_cmp(row.get(k)) for k in upsert_keys))
+        if not matches:
+            added += 1
+        elif any(_cmp(row[c]) != _cmp(rec.get(c)) for rec in matches for c in row):
+            modified += 1
+        else:
+            unchanged += 1
+    return {"added": added, "modified": modified, "unchanged": unchanged}
+
+
 def send_rows(rows: list[dict], upsert_keys: list[str]) -> dict:
     if not rows:
         return {"rows_sent": 0}

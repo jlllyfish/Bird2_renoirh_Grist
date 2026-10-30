@@ -251,52 +251,54 @@ function showResult(data) {
     const total = data.rows_processed || 0;
     const added = data.inserted || 0;
     const files = data.files_processed || 0;
+    const detailed = data.modified !== null && data.modified !== undefined;
+    const table = data.table ? `Table « ${escHtml(data.table)} »` : "Table Grist";
 
-    // Calcul des arcs SVG (circonférence ≈ 163.4 pour r=26)
+    // Cercle SVG (circonférence ≈ 163.4 pour r=26)
     const circ = 163.4;
-    const arcAdded = Math.min((added / Math.max(total, 1)) * circ, circ);
-    const arcTotal = Math.min((total / Math.max(total + 10, 1)) * circ, circ);
-    const arcFiles = Math.min((files / 5) * circ, circ);
+    const statRow = (label, sub, value, ratio, color) => `
+        <div class="stat-row">
+          <div><div class="stat-label">${label}</div><div class="stat-sub">${sub}</div></div>
+          <div class="stat-circle">
+            <svg width="48" height="48" viewBox="0 0 60 60">
+              <circle cx="30" cy="30" r="26" fill="none" stroke="#FFF6D8" stroke-width="6"/>
+              <circle cx="30" cy="30" r="26" fill="none" stroke="${color}" stroke-width="6" stroke-linecap="round" stroke-dasharray="${Math.min(ratio, 1) * circ} ${circ}" transform="rotate(-90 30 30)"/>
+            </svg>
+            <div class="stat-circle-val">${value}</div>
+          </div>
+        </div>`;
+    const part = (n) => (total > 0 ? n / total : 0);
+
+    const rowsHtml = detailed
+      ? statRow("Lignes ajoutées", "nouvelles dans Grist", added, part(added), "#F7C600") +
+        statRow("Lignes modifiées", "valeurs mises à jour", data.modified, part(data.modified), "#171717") +
+        statRow("Lignes inchangées", "déjà à jour", data.unchanged, part(data.unchanged), "#B89400")
+      : statRow("Lignes ajoutées", "sur ce lot", added, part(added), "#F7C600") +
+        statRow("Lignes traitées", "au total", total, total > 0 ? 1 : 0, "#171717") +
+        statRow("Fichiers traités", "ce lot", files, Math.min(files / 5, 1), "#B89400");
 
     const keysHtml = data.upsert && data.upsert_keys?.length
       ? `<div class="keys-block">
           <span class="keys-label-text">Clés d'upsert</span>
-          <div class="keys-tags">${data.upsert_keys.map(k => `<span class="key-tag">${k}</span>`).join("")}</div>
+          <div class="keys-tags">${data.upsert_keys.map(k => `<span class="key-tag">${escHtml(k)}</span>`).join("")}</div>
          </div>`
       : "";
 
+    let title;
+    let sub;
+    if (data.up_to_date) {
+      title = `${table} déjà à jour`;
+      sub = `Aucune ligne ajoutée ni modifiée · ${plural(total, "ligne")} vérifiée${total > 1 ? "s" : ""}`;
+    } else if (detailed) {
+      title = "Synchronisation réussie";
+      sub = `${table} : ${added} ajoutée${added > 1 ? "s" : ""} · ${data.modified} modifiée${data.modified > 1 ? "s" : ""} · ${data.unchanged} inchangée${data.unchanged > 1 ? "s" : ""}`;
+    } else {
+      title = "Synchronisation réussie";
+      sub = `${table} · ${plural(total, "ligne")} traitée${total > 1 ? "s" : ""}`;
+    }
+
     resultContent.innerHTML = `
-      <div class="stat-block">
-        <div class="stat-row">
-          <div><div class="stat-label">Lignes ajoutées</div><div class="stat-sub">sur ce lot</div></div>
-          <div class="stat-circle">
-            <svg width="48" height="48" viewBox="0 0 60 60">
-              <circle cx="30" cy="30" r="26" fill="none" stroke="#FFF6D8" stroke-width="6"/>
-              <circle cx="30" cy="30" r="26" fill="none" stroke="#F7C600" stroke-width="6" stroke-linecap="round" stroke-dasharray="${arcAdded} ${circ}" transform="rotate(-90 30 30)"/>
-            </svg>
-            <div class="stat-circle-val">${added}</div>
-          </div>
-        </div>
-        <div class="stat-row">
-          <div><div class="stat-label">Lignes traitées</div><div class="stat-sub">au total</div></div>
-          <div class="stat-circle">
-            <svg width="48" height="48" viewBox="0 0 60 60">
-              <circle cx="30" cy="30" r="26" fill="none" stroke="#FFF6D8" stroke-width="6"/>
-              <circle cx="30" cy="30" r="26" fill="none" stroke="#171717" stroke-width="6" stroke-linecap="round" stroke-dasharray="${arcTotal} ${circ}" transform="rotate(-90 30 30)"/>
-            </svg>
-            <div class="stat-circle-val">${total}</div>
-          </div>
-        </div>
-        <div class="stat-row">
-          <div><div class="stat-label">Fichiers traités</div><div class="stat-sub">ce lot</div></div>
-          <div class="stat-circle">
-            <svg width="48" height="48" viewBox="0 0 60 60">
-              <circle cx="30" cy="30" r="26" fill="none" stroke="#FFF6D8" stroke-width="6"/>
-              <circle cx="30" cy="30" r="26" fill="none" stroke="#B89400" stroke-width="6" stroke-linecap="round" stroke-dasharray="${arcFiles} ${circ}" transform="rotate(-90 30 30)"/>
-            </svg>
-            <div class="stat-circle-val">${files}</div>
-          </div>
-        </div>
+      <div class="stat-block">${rowsHtml}
       </div>
       ${keysHtml}
       <div class="result-ok-banner">
@@ -305,7 +307,10 @@ function showResult(data) {
             <polyline points="20 6 9 17 4 12"/>
           </svg>
         </div>
-        <span>Synchronisation réussie</span>
+        <div class="result-ok-text">
+          <strong>${title}</strong>
+          <span>${sub}</span>
+        </div>
       </div>`;
   } else {
     resultContent.innerHTML = `

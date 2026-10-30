@@ -38,7 +38,15 @@ if _external_mapping.exists():
 from dotenv import load_dotenv  # noqa: E402
 from excel_reader import aggregate_files_by_profile, build_preview  # noqa: E402
 from flask import Flask, jsonify, render_template, request  # noqa: E402
-from grist_client import _build_session, _count_grist_rows, check_config, send_rows  # noqa: E402
+from grist_client import (  # noqa: E402
+    GRIST_TABLE,
+    _build_session,
+    _count_grist_rows,
+    check_config,
+    count_changes,
+    fetch_records,
+    send_rows,
+)
 from mapping import BATCH_SIZE, CASES, COLUMN_MAP  # noqa: E402
 
 # ── Config ────────────────────────────────────────────────────
@@ -170,8 +178,15 @@ def api_import():
                 }
             ), 422
 
-        before_total = _count_grist_rows()
+        # État actuel de la table : sert à compter lignes ajoutées / modifiées / inchangées
+        existing = fetch_records()
+        before_total = len(existing) if existing is not None else _count_grist_rows()
         log.info(f"Lignes Grist avant: {before_total}")
+        planned_modified = None
+        if existing is not None:
+            planned_modified = sum(
+                count_changes(existing, rows, keys)["modified"] for rows, keys in groups
+            )
 
         total_sent = 0
         for rows, effective_keys in groups:
@@ -182,9 +197,21 @@ def api_import():
                 log.info(f"Batch envoyé: {len(batch)} lignes")
 
         after_total = _count_grist_rows()
-        total_inserted = after_total - before_total
-        total_updated = after_total - total_inserted
-        log.info(f"Résultat: {total_inserted} ajoutées, {total_updated} mises à jour")
+        total_inserted = max(after_total - before_total, 0)
+        matched = max(total_sent - total_inserted, 0)
+        if planned_modified is None:
+            modified = unchanged = None
+        else:
+            modified = min(planned_modified, matched)
+            unchanged = matched - modified
+        # "À jour" seulement si les deux comptages Grist sont fiables
+        up_to_date = (
+            existing is not None and after_total > 0 and total_inserted == 0 and modified == 0
+        )
+        log.info(
+            f"Résultat: {total_inserted} ajoutées, {modified} modifiées, "
+            f"{unchanged} inchangées, à jour={up_to_date}"
+        )
 
         all_keys_used = list(dict.fromkeys(k for _, keys in groups for k in keys))
         return jsonify(
@@ -192,7 +219,10 @@ def api_import():
                 "success": True,
                 "rows_processed": total_sent,
                 "inserted": total_inserted,
-                "updated": total_updated,
+                "modified": modified,
+                "unchanged": unchanged,
+                "up_to_date": up_to_date,
+                "table": GRIST_TABLE,
                 "files_processed": len(tmp_paths),
                 "upsert": bool(all_keys_used),
                 "upsert_keys": all_keys_used,
