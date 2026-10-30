@@ -209,7 +209,7 @@ function renderPreview(data) {
     previewOk = data.total_rows > 0;
     html += `
       <p class="preview-summary">
-        ${badge(data.case_label, "badge-ok")}
+        ${badge("Cas : " + data.case_label, "badge-ok")}
         <span>${plural(data.files_recognized, "fichier")} reconnu${data.files_recognized > 1 ? "s" : ""} · ${plural(data.total_rows, "ligne")} · mode Upsert sur ${escHtml(data.upsert_keys.join(", "))}</span>
       </p>`;
     if (data.warnings.length) html += alertBox("warn", data.warnings.map(escHtml));

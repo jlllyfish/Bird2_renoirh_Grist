@@ -54,7 +54,7 @@ CSV_MAIL_ROLE = {
 
 # ── CAS A : 3 fichiers (HRA-Par_période_de_formation / HRA-Par_session-periodes / HRA-Présence-Absence_periodes) ──
 CASE_A = {
-    "label": "3 fichiers (période de formation)",
+    "label": "Période de formation",
     "full_key": ["Libelle", "Stage", "Session", "Presentation_du_nom", "Numero_de_periode"],
     "roles": {
         "principal": {
@@ -98,7 +98,7 @@ CASE_A = {
 
 # ── CAS B : 2 fichiers (HRA-Gérer_les_inscriptions / HRA-Présence-Absence_session) ──
 CASE_B = {
-    "label": "2 fichiers (session)",
+    "label": "Session",
     "full_key": ["Libelle", "Stage", "Session", "Presentation_du_nom"],
     "roles": {
         "principal": {
