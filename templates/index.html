@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="/static/img/bird_logo.svg" />
+    <title>Bird 2</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <!-- ── SIDEBAR ─────────────────────────────── -->
+      <aside class="sidebar">
+        <div class="logo">
+          <img src="/static/img/bird_logo.svg" alt="Bird" class="logo-img" />
+          <div>
+            <div class="logo-title">Bird 2</div>
+            <div class="logo-sub">Bridge Import RenoirRH Datas</div>
+          </div>
+        </div>
+
+        <div class="sidebar-section">
+          <div class="section-label">Connexion Grist</div>
+          <div class="status-badge {{ 'ok' if grist_ok else 'err' }}">
+            <span class="dot"></span>
+            <span>{{ grist_msg }}</span>
+          </div>
+        </div>
+
+        <div class="sidebar-section">
+          <div class="section-label">Configuration</div>
+          <div class="config-row">
+            <span>Onglets</span>
+            <strong>{{ mapping.sheets | length }}</strong>
+          </div>
+          <div class="config-row">
+            <span>Colonnes</span>
+            <strong>{{ mapping.columns | length }}</strong>
+          </div>
+          <div class="config-row">
+            <span>Mode</span>
+            <span class="badge-mode"
+              >{{ 'Upsert' if mapping.upsert_keys else 'Insert' }}</span
+            >
+          </div>
+        </div>
+
+        <div class="sidebar-footer">
+          <span class="footer-version"
+            >Bridge Import RenoirRH Datas · v5.0<br />Draaf Occitanie —
+            2026</span
+          >
+          <button class="btn-quit" onclick="quitApp()">
+            <svg
+              width="13"
+              height="13"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4" />
+              <polyline points="16 17 21 12 16 7" />
+              <line x1="21" y1="12" x2="9" y2="12" />
+            </svg>
+            Quitter
+          </button>
+        </div>
+      </aside>
+
+      <!-- ── MAIN ───────────────────────────────── -->
+      <main class="main">
+        <div class="main-header">
+          <div class="main-title">Import</div>
+          <div class="main-sub">Fichiers Excel vers Grist</div>
+        </div>
+
+        <!-- Drop zone -->
+        <div class="drop-zone" id="dropZone">
+          <div class="drop-icon-wrap">
+            <svg
+              width="24"
+              height="24"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+            >
+              <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+              <polyline points="17 8 12 3 7 8" />
+              <line x1="12" y1="3" x2="12" y2="15" />
+            </svg>
+          </div>
+          <p class="drop-text">Glissez vos fichiers Excel ici</p>
+          <label class="btn-browse">
+            Parcourir…
+            <input
+              type="file"
+              id="fileInput"
+              multiple
+              accept=".xlsx,.xls,.xlsm,.csv"
+              hidden
+            />
+          </label>
+          <p class="drop-formats">.xlsx · .xls · .xlsm · .csv</p>
+        </div>
+
+        <!-- File list -->
+        <div class="file-section hidden" id="fileSection">
+          <div class="file-section-header">
+            <span class="section-label">Fichiers sélectionnés</span>
+            <span class="file-count" id="fileCount"></span>
+          </div>
+          <div id="fileList" class="file-list"></div>
+        </div>
+
+        <!-- Action bar -->
+        <div class="action-bar">
+          <button class="btn-clear hidden" id="btnClear" onclick="clearFiles()">
+            ✕ Vider
+          </button>
+          <button class="btn-send" id="btnSend" disabled onclick="doImport()">
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.3"
+            >
+              <line x1="22" y1="2" x2="11" y2="13" />
+              <polygon points="22 2 15 22 11 13 2 9 22 2" />
+            </svg>
+            Envoyer vers Grist
+          </button>
+        </div>
+      </main>
+
+      <!-- ── RIGHT PANEL ────────────────────────── -->
+      <aside class="right-panel">
+        <div class="panel-header">
+          <div class="panel-title">Résultat</div>
+          <div class="panel-sub">Dernier envoi</div>
+        </div>
+
+        <div class="result-card hidden" id="resultCard">
+          <div id="resultContent"></div>
+        </div>
+
+        <div class="result-empty" id="resultEmpty">
+          <svg
+            width="32"
+            height="32"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.5"
+          >
+            <circle cx="12" cy="12" r="10" />
+            <line x1="12" y1="8" x2="12" y2="12" />
+            <line x1="12" y1="16" x2="12.01" y2="16" />
+          </svg>
+          <p>Aucun envoi encore effectué</p>
+        </div>
+      </aside>
+
+      <!-- Loader -->
+      <div class="bird-loader hidden" id="progressOverlay">
+        <img
+          src="/static/img/bird_loader.svg"
+          alt="Envoi en cours"
+          class="bird-loader-img"
+        />
+        <p class="bird-loader-text">Envoi en cours…</p>
+      </div>
+    </div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

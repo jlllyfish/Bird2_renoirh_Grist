@@ -1,0 +1,30 @@
+# Secrets & config locale
+.env
+.env.*
+!.env.example
+
+# Logs
+bird.log
+*.log
+
+# Données RenoirRH (personnelles — ne jamais versionner)
+*.xlsx
+*.xls
+*.xlsm
+*.csv
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Build PyInstaller
+build/
+dist/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
